@@ -191,7 +191,7 @@ export default function App() {
            <div className="flex justify-center mb-4">
               <GraduationCap size={48} className="text-emerald-500" />
            </div>
-           <h1 className="text-2xl font-extrabold text-blue-600 mb-6">CỦA PAYIO</h1>
+           <h1 className="text-2xl font-extrabold text-blue-600 mb-6">💙 CỦA PAYIO</h1>
            <button onClick={handleGoogleLogin} className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 transition">
              Đăng nhập với Google
            </button>
