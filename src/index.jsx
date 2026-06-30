@@ -195,3 +195,9 @@ function NavItem({ icon, label, active, onClick }) {
     </button>
   );
 }
+
+// Thêm đoạn này vào cuối file index.jsx nếu cuối file chưa có phần render nhé:
+import { createRoot } from 'react-dom/client';
+const container = document.getElementById('root');
+const root = createRoot(container);
+root.render(<App />);
