@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
   Calendar as CalendarIcon, BookOpen, DollarSign, PieChart, Plus, CheckCircle, 
   User, Trash2, Edit2, Menu, X, CheckSquare, TrendingUp, AlertCircle, Wallet,
-  GraduationCap, LogOut
+  GraduationCap, LogOut, CalendarCheck
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer
@@ -10,7 +10,7 @@ import {
 
 import { initializeApp } from 'firebase/app';
 import { 
-  getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut 
+  getAuth, signInWithPopup, signInWithRedirect, getRedirectResult, GoogleAuthProvider, onAuthStateChanged, signOut 
 } from 'firebase/auth';
 import { 
   getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, serverTimestamp 
@@ -37,7 +37,7 @@ const DAYS_OF_WEEK = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
 export default function App() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('students');
+  const [activeTab, setActiveTab] = useState('sessions');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   
   // Dữ liệu thật từ Firebase
@@ -58,10 +58,21 @@ export default function App() {
   const [showSessionModal, setShowSessionModal] = useState(false);
   const [newSession, setNewSession] = useState({ studentId: '', date: selectedDate, fee: 0, notes: '' });
 
+  const [showAutoSessionModal, setShowAutoSessionModal] = useState(false);
+  const [autoSessionRange, setAutoSessionRange] = useState({ start: selectedDate, end: selectedDate });
+  const [isAutoProcessing, setIsAutoProcessing] = useState(false);
+
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [newPayment, setNewPayment] = useState({ studentId: '', date: selectedDate, amount: 0 });
 
   useEffect(() => {
+    getRedirectResult(auth).catch((error) => {
+      console.error("Lỗi Redirect Firebase:", error);
+      if (error.code === 'auth/missing-initial-state') {
+         alert("Trình duyệt chặn cookie. Vui lòng mở bằng trình duyệt Safari/Chrome chuẩn và tắt chế độ Ẩn danh.");
+      }
+    });
+
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       setAuthLoading(false);
@@ -69,7 +80,6 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Lắng nghe dữ liệu Real-time
   useEffect(() => {
     if (!user) return;
     const unsubStudents = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'students'), (s) => setStudents(s.docs.map(d => ({ id: d.id, ...d.data() }))));
@@ -81,9 +91,15 @@ export default function App() {
   const handleGoogleLogin = async () => {
     try {
       const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
+      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+      
+      if (isMobile) {
+        await signInWithRedirect(auth, provider);
+      } else {
+        await signInWithPopup(auth, provider);
+      }
     } catch (error) {
-      alert("Lỗi đăng nhập: " + error.message);
+      alert("Lỗi đăng nhập: Vui lòng đảm bảo bạn không dùng trình duyệt ẩn danh. Lỗi chi tiết: " + error.message);
     }
   };
 
@@ -188,16 +204,14 @@ export default function App() {
     const dayMapToNum = { 'CN': 0, 'T2': 1, 'T3': 2, 'T4': 3, 'T5': 4, 'T6': 5, 'T7': 6 };
     const selectedNums = schedule.days.map(day => dayMapToNum[day]);
     
-    // Tìm ngày đầu tiên khớp với các thứ đã chọn để làm ngày bắt đầu sự kiện
     let currentDay = d.getDay();
     let daysToAdd = 0;
     while (!selectedNums.includes((currentDay + daysToAdd) % 7)) {
         daysToAdd++;
-        if (daysToAdd > 7) break; // Tránh loop vô hạn
+        if (daysToAdd > 7) break;
     }
     d.setDate(d.getDate() + daysToAdd);
     
-    // Hàm format thời gian theo chuẩn YYYYMMDDTHHMMSS
     const formatGCalDate = (dateObj) => {
       return dateObj.getFullYear().toString() + 
              (dateObj.getMonth() + 1).toString().padStart(2, '0') + 
@@ -207,8 +221,6 @@ export default function App() {
     };
     
     const dtstart = formatGCalDate(d);
-    
-    // Mặc định mỗi ca 1.5 tiếng (90 phút)
     const endD = new Date(d.getTime() + 90 * 60000); 
     const dtend = formatGCalDate(endD);
     
@@ -218,11 +230,10 @@ export default function App() {
     let rrule = `RRULE:FREQ=WEEKLY;BYDAY=${byDays}`;
     if (schedule.endDate) {
         const [eYear, eMonth, eDate] = schedule.endDate.split('-');
-        // Google URL RRULE UNTIL thường chuộng UTC (kết thúc bằng Z). Để chắc chắn quét hết ngày, cho giờ là 23:59:59Z
         rrule += `;UNTIL=${eYear}${eMonth}${eDate}T235959Z`;
     }
     
-    const details = `Lịch giảng 💙 của Payio`;
+    const details = `Lịch giảng\nHọc sinh: ${student.name}\nHọc phí: ${new Intl.NumberFormat('vi-VN').format(student.feePerSession)} VNĐ/buổi\nPhần mềm Quản lý Gia sư Payio`;
     
     const url = new URL('https://calendar.google.com/calendar/render');
     url.searchParams.append('action', 'TEMPLATE');
@@ -234,7 +245,7 @@ export default function App() {
     window.open(url.toString(), '_blank');
   };
 
-  // Các hàm chấm công / thanh toán
+  // --- CÁC HÀM CHẤM CÔNG / THANH TOÁN --- //
   const handleAddSession = async (e) => {
     e.preventDefault();
     if (!newSession.studentId) return;
@@ -256,6 +267,77 @@ export default function App() {
       notes: 'Chấm công nhanh theo lịch',
       createdAt: serverTimestamp()
     });
+  };
+
+  const handleAutoAddSessions = async (e) => {
+    e.preventDefault();
+    setIsAutoProcessing(true);
+    try {
+        const dayMap = {0: 'CN', 1: 'T2', 2: 'T3', 3: 'T4', 4: 'T5', 5: 'T6', 6: 'T7'};
+        const newSessions = [];
+
+        let currStr = autoSessionRange.start;
+        const endStr = autoSessionRange.end;
+
+        if (currStr > endStr) {
+            alert("Ngày bắt đầu không thể lớn hơn ngày kết thúc.");
+            setIsAutoProcessing(false);
+            return;
+        }
+
+        // Lặp qua từng ngày trong khoảng
+        while (currStr <= endStr) {
+            const [y, m, d] = currStr.split('-');
+            const dateObj = new Date(y, m - 1, d);
+            const jsDay = dateObj.getDay();
+            const dayString = dayMap[jsDay];
+
+            students.forEach(student => {
+                if (student.schedules && student.schedules.length > 0) {
+                    const activeSch = student.schedules.find(sch =>
+                        currStr >= sch.startDate && (!sch.endDate || currStr <= sch.endDate) && sch.days.includes(dayString)
+                    );
+
+                    if (activeSch) {
+                        const exists = sessions.some(s => s.studentId === student.id && s.date === currStr);
+                        if (!exists) {
+                            newSessions.push({
+                                studentId: student.id,
+                                date: currStr,
+                                fee: Number(student.feePerSession),
+                                notes: 'Chấm công tự động'
+                            });
+                        }
+                    }
+                }
+            });
+
+            // Tăng thêm 1 ngày
+            dateObj.setDate(dateObj.getDate() + 1);
+            const ny = dateObj.getFullYear();
+            const nm = String(dateObj.getMonth() + 1).padStart(2, '0');
+            const nd = String(dateObj.getDate()).padStart(2, '0');
+            currStr = `${ny}-${nm}-${nd}`;
+        }
+
+        if (newSessions.length === 0) {
+            alert("Không tìm thấy buổi học nào cần chấm công trong khoảng thời gian này (hoặc tất cả đã được chấm).");
+        } else {
+            const promises = newSessions.map(sessionData =>
+                addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'sessions'), {
+                    ...sessionData,
+                    createdAt: serverTimestamp()
+                })
+            );
+            await Promise.all(promises);
+            alert(`Đã chấm công tự động thành công ${newSessions.length} buổi học!`);
+        }
+    } catch (error) {
+        console.error("Lỗi auto chấm công", error);
+        alert("Có lỗi xảy ra khi chấm công tự động.");
+    }
+    setIsAutoProcessing(false);
+    setShowAutoSessionModal(false);
   };
 
   const handleAddPayment = async (e) => {
@@ -354,9 +436,10 @@ export default function App() {
               <GraduationCap size={48} className="text-emerald-500" />
            </div>
            <h1 className="text-2xl font-extrabold text-blue-600 mb-6">💙 CỦA PAYIO</h1>
-           <button onClick={handleGoogleLogin} className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 transition">
+           <button onClick={handleGoogleLogin} className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 transition shadow-sm">
              Đăng nhập với Google
            </button>
+           <p className="text-xs text-gray-400 mt-4 px-2">Nếu dùng iPhone, vui lòng mở link bằng trình duyệt chuẩn (Safari/Chrome).</p>
         </div>
       </div>
     );
@@ -424,9 +507,14 @@ export default function App() {
               <div className="max-w-5xl mx-auto space-y-6">
                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                     <h2 className="text-2xl font-bold text-gray-800">Chấm công giảng dạy</h2>
-                    <button onClick={() => setShowSessionModal(true)} className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-medium flex items-center gap-2 shadow-sm transition">
-                      <CheckSquare size={18} /> Chấm công thủ công (Học bù)
-                    </button>
+                    <div className="flex gap-2 flex-wrap">
+                        <button onClick={() => setShowAutoSessionModal(true)} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-lg text-sm font-medium flex items-center gap-2 shadow-sm transition">
+                          <CalendarCheck size={18} /> Chấm công tự động
+                        </button>
+                        <button onClick={() => setShowSessionModal(true)} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-lg text-sm font-medium flex items-center gap-2 shadow-sm transition">
+                          <CheckSquare size={18} /> Chấm công thủ công
+                        </button>
+                    </div>
                  </div>
                  
                  <div className="bg-emerald-50/50 border border-emerald-100 p-6 rounded-2xl flex flex-col gap-4">
@@ -535,15 +623,15 @@ export default function App() {
                          const today = new Date().toISOString().split('T')[0];
                          const sortedSchedules = [...(s.schedules || [])].sort((a,b) => {
                             const getStatus = (sch) => {
-                               if (sch.endDate && sch.endDate < today) return 2; // Quá khứ
-                               if (sch.startDate > today) return 1; // Tương lai
-                               return 0; // Hiện tại (đang diễn ra)
+                               if (sch.endDate && sch.endDate < today) return 2; 
+                               if (sch.startDate > today) return 1; 
+                               return 0; 
                             };
                             const statusA = getStatus(a);
                             const statusB = getStatus(b);
                             
                             if (statusA !== statusB) return statusA - statusB; 
-                            return b.startDate.localeCompare(a.startDate); // Cùng trạng thái thì xếp theo ngày tạo mới nhất lên trên
+                            return b.startDate.localeCompare(a.startDate); 
                          });
 
                          return (
@@ -721,6 +809,34 @@ export default function App() {
       </main>
 
       {/* --- MODALS --- */}
+
+      {/* Modal Chấm Công Tự Động */}
+      {showAutoSessionModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-lg relative">
+            <button onClick={() => !isAutoProcessing && setShowAutoSessionModal(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"><X size={20}/></button>
+            <h3 className="text-xl font-bold mb-2">Chấm công tự động</h3>
+            <p className="text-sm text-gray-500 mb-6">Hệ thống sẽ dựa vào Lịch học của tất cả học sinh để tự động tạo các buổi dạy trong khoảng thời gian được chọn (Bỏ qua các buổi đã chấm).</p>
+            <form onSubmit={handleAutoAddSessions} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Từ ngày</label>
+                    <input required type="date" value={autoSessionRange.start} onChange={e => setAutoSessionRange({...autoSessionRange, start: e.target.value})} className="w-full border border-gray-300 p-2.5 rounded-lg focus:ring-2 focus:ring-emerald-500/50 outline-none text-gray-700" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Đến ngày</label>
+                    <input required type="date" value={autoSessionRange.end} onChange={e => setAutoSessionRange({...autoSessionRange, end: e.target.value})} className="w-full border border-gray-300 p-2.5 rounded-lg focus:ring-2 focus:ring-emerald-500/50 outline-none text-gray-700" />
+                  </div>
+              </div>
+              <div className="mt-6 pt-2">
+                <button type="submit" disabled={isAutoProcessing} className={`w-full py-3 text-white font-medium rounded-lg transition shadow-sm ${isAutoProcessing ? 'bg-gray-400 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700'}`}>
+                    {isAutoProcessing ? 'Đang xử lý...' : 'Thực hiện chấm công'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
       
       {/* Modal Thêm/Sửa Học Sinh */}
       {showStudentModal.show && (
