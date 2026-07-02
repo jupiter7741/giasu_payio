@@ -1,0 +1,10 @@
+Bật GIT CMD
+chạy lệnh: npm run dev
+
+lệnh đẩy file:
+git add .
+git cmmit -m "update"
+git push origin main
+
+link web: https://payio-love-tutor.vercel.app/
+database: https://console.firebase.google.com/u/0/project/giasupayio/dataconnect

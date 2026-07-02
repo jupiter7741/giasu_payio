@@ -13,7 +13,8 @@ import {
   getAuth, signInWithPopup, signInWithRedirect, getRedirectResult, GoogleAuthProvider, onAuthStateChanged, signOut 
 } from 'firebase/auth';
 import { 
-  getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, serverTimestamp 
+  getFirestore, collection, onSnapshot, addDoc, deleteDoc, doc, updateDoc, serverTimestamp,
+  query, where, getDocs
 } from 'firebase/firestore';
 
 import './index.css'; 
@@ -37,7 +38,7 @@ const DAYS_OF_WEEK = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
 export default function App() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('sessions');
+  const [activeTab, setActiveTab] = useState('students');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   
   // Dữ liệu thật từ Firebase
@@ -107,7 +108,7 @@ export default function App() {
     await signOut(auth);
   };
 
-  // --- HÀM TƯƠNG TÁC DATABASE --- //
+  // --- QUẢN LÝ HỌC SINH --- //
 
   const handleSaveStudent = async (e) => {
     e.preventDefault();
@@ -133,6 +134,34 @@ export default function App() {
   const openEditStudent = (student) => {
     setNewStudent({ name: student.name, feePerSession: student.feePerSession });
     setShowStudentModal({ show: true, editData: student });
+  };
+
+  // Hàm xóa liên hoàn (Học sinh + Chấm công + Thanh toán)
+  const handleDeleteStudent = async (studentId) => {
+    const confirmDelete = window.confirm("CẢNH BÁO: Bạn đang xóa 1 học sinh.\nHành động này sẽ XÓA TOÀN BỘ lịch sử chấm công và thanh toán của học sinh này. Bạn có chắc chắn không?");
+    if (!confirmDelete) return;
+
+    try {
+      // 1. Quét và xóa các buổi chấm công của học sinh này
+      const sessionsQuery = query(collection(db, 'artifacts', appId, 'users', user.uid, 'sessions'), where("studentId", "==", studentId));
+      const sessionsSnap = await getDocs(sessionsQuery);
+      const deleteSessionPromises = sessionsSnap.docs.map(d => deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'sessions', d.id)));
+      
+      // 2. Quét và xóa các khoản thanh toán của học sinh này
+      const paymentsQuery = query(collection(db, 'artifacts', appId, 'users', user.uid, 'payments'), where("studentId", "==", studentId));
+      const paymentsSnap = await getDocs(paymentsQuery);
+      const deletePaymentPromises = paymentsSnap.docs.map(d => deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'payments', d.id)));
+
+      // 3. Thực thi xóa hàng loạt
+      await Promise.all([...deleteSessionPromises, ...deletePaymentPromises]);
+      
+      // 4. Xóa Document học sinh
+      await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'students', studentId));
+      
+    } catch (error) {
+      console.error("Lỗi khi xóa học sinh: ", error);
+      alert("Đã xảy ra lỗi trong quá trình xóa dữ liệu.");
+    }
   };
 
   // --- QUẢN LÝ ĐỢT HỌC (SCHEDULES) --- //
@@ -188,6 +217,15 @@ export default function App() {
     }
   };
 
+  const handleDeleteSchedule = async (student, scheduleId) => {
+    if(window.confirm("Bạn có chắc chắn muốn xóa lịch học này không?")) {
+        const newSchedules = student.schedules.filter(sch => sch.id !== scheduleId);
+        await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'students', student.id), {
+            schedules: newSchedules
+        });
+    }
+  };
+
   const toggleDay = (day) => {
     setScheduleForm(prev => ({
       ...prev,
@@ -195,7 +233,7 @@ export default function App() {
     }));
   };
 
-  // --- XUẤT LỊCH RA GOOGLE CALENDAR QUA URL --- //
+  // --- XUẤT LỊCH RA GOOGLE CALENDAR --- //
   const exportToCalendar = (student, schedule) => {
     const [year, month, date] = schedule.startDate.split('-');
     const [hour, minute] = schedule.time.split(':');
@@ -285,7 +323,6 @@ export default function App() {
             return;
         }
 
-        // Lặp qua từng ngày trong khoảng
         while (currStr <= endStr) {
             const [y, m, d] = currStr.split('-');
             const dateObj = new Date(y, m - 1, d);
@@ -312,7 +349,6 @@ export default function App() {
                 }
             });
 
-            // Tăng thêm 1 ngày
             dateObj.setDate(dateObj.getDate() + 1);
             const ny = dateObj.getFullYear();
             const nm = String(dateObj.getMonth() + 1).padStart(2, '0');
@@ -642,7 +678,10 @@ export default function App() {
                                       <h3 className="text-xl font-bold text-gray-900">{s.name}</h3>
                                       <p className="text-sm text-gray-400 mt-1">{formatVND(s.feePerSession)} / buổi</p>
                                     </div>
-                                    <button onClick={() => openEditStudent(s)} className="text-gray-400 hover:text-blue-600 transition" title="Đổi tên/học phí"><Edit2 size={18}/></button>
+                                    <div className="flex gap-2">
+                                        <button onClick={() => openEditStudent(s)} className="text-gray-400 hover:text-blue-600 transition" title="Đổi tên/học phí"><Edit2 size={18}/></button>
+                                        <button onClick={() => handleDeleteStudent(s.id)} className="text-gray-400 hover:text-red-600 transition" title="Xóa học sinh"><Trash2 size={18}/></button>
+                                    </div>
                                  </div>
                                  <div className="mt-auto space-y-2.5 text-sm">
                                     <div className="flex justify-between"><span className="text-gray-400">Đã dạy:</span> <span className="font-bold text-gray-900">{s.totalSessions} buổi</span></div>
@@ -670,6 +709,7 @@ export default function App() {
                                                   <div className="flex items-center gap-1.5 ml-1">
                                                      <button onClick={() => openScheduleModal(s, sch)} className="text-blue-500 hover:text-blue-700 bg-white p-1 rounded-md border border-blue-100 shadow-sm" title="Sửa đợt học"><Edit2 size={12}/></button>
                                                      <button onClick={() => exportToCalendar(s, sch)} className="text-emerald-500 hover:text-emerald-700 bg-white p-1 rounded-md border border-emerald-100 shadow-sm" title="Lưu lịch GG Calendar"><CalendarIcon size={12}/></button>
+                                                     <button onClick={() => handleDeleteSchedule(s, sch.id)} className="text-red-500 hover:text-red-700 bg-white p-1 rounded-md border border-red-100 shadow-sm" title="Xóa đợt học"><Trash2 size={12}/></button>
                                                   </div>
                                                </div>
                                                <div className="flex gap-1 flex-wrap mt-1.5">
